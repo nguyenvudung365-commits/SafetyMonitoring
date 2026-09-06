@@ -178,8 +178,20 @@ def main():
         for img, lines in v:
             shutil.copy2(img, out/k/"images"/img.name)
             (out/k/"labels"/(img.stem+".txt")).write_text("\n".join(lines))
-    # mapping
+    # mapping (ghi lại bảng alias đã dùng để tra cứu/audit sau này)
     (out/"mapping.yaml").write_text(yaml.dump({"aliases": ALIASES, "classes": ["person","helmet","no_helmet","vest","no_vest","machinery"]}, allow_unicode=True))
+
+    # data.yaml chuẩn Ultralytics để Hoài trỏ vào khi train YOLOv8 (--data data/m1/data.yaml)
+    data_yaml_content = {
+        "path": str(out.resolve()),
+        "train": "train/images",
+        "val": "val/images",
+        "test": "test/images",
+        "nc": 6,
+        "names": ["person", "helmet", "no_helmet", "vest", "no_vest", "machinery"],
+    }
+    (out/"data.yaml").write_text(yaml.dump(data_yaml_content, allow_unicode=True, sort_keys=False))
+    print(f"Đã tạo {out/'data.yaml'} (dùng cho Ultralytics YOLOv8 train)")
     print(f"Done -> {out}")
 
 if __name__ == "__main__":
