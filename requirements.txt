@@ -1,4 +1,5 @@
 ultralytics>=8.2
+requests>=2.31
 opencv-python>=4.8
 pyyaml>=6.0
 numpy>=1.24
