@@ -1,0 +1,12 @@
+path: C:\Users\phuon\Documents\Projects\SafetyMonitoring\data\m1
+train: train/images
+val: val/images
+test: test/images
+nc: 6
+names:
+- person
+- helmet
+- no_helmet
+- vest
+- no_vest
+- machinery

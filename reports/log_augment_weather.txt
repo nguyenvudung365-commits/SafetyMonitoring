@@ -1,0 +1,4 @@
+﻿Tim thay 13725 anh goc trong data/m1/train/images
+Da tao 13725 anh augment mua/suong/bui moi
+Bo qua 0 anh (khong co nhan hoac khong doc duoc anh)
+Tong anh trong data/m1/train/images sau khi them: 27450

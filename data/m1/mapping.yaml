@@ -1,0 +1,43 @@
+aliases:
+  construction_vehicle: 5
+  crane: 5
+  excavator: 5
+  forklift: 5
+  hard_hat: 1
+  hardhat: 1
+  head: 2
+  helmet: 1
+  human: 0
+  machinery: 5
+  man: 0
+  mask: null
+  mixer: 5
+  no_hard_hat: 2
+  no_hardhat: 2
+  no_helmet: 2
+  no_mask: null
+  no_safety_vest: 4
+  no_vest: 4
+  people: 0
+  person: 0
+  reflective: 3
+  reflective_vest: 3
+  safety_cone: null
+  safety_vest: 3
+  truck: 5
+  vehicle: 5
+  vest: 3
+  with_helmet: 1
+  with_vest: 3
+  without_hardhat: 2
+  without_helmet: 2
+  without_reflective: 4
+  without_vest: 4
+  worker: 0
+classes:
+- person
+- helmet
+- no_helmet
+- vest
+- no_vest
+- machinery
