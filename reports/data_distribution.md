@@ -4,7 +4,7 @@
 
 | Split | Số ảnh | Tổng bbox |
 |---|---|---|
-| train | 13725 | 65429 |
+| train | 27450 | 130858 |
 | val | 3887 | 18407 |
 | test | 1991 | 9901 |
 
@@ -12,14 +12,14 @@
 
 | Lớp | train | val | test | Tổng |
 |---|---|---|---|---|
-| 0 (person) | 7897 | 2184 | 1185 | 11266 |
-| 1 (helmet) | 35239 | 10030 | 5446 | 50715 |
-| 2 (no_helmet) | 12645 | 3527 | 1778 | 17950 |
-| 3 (vest) | 2220 | 714 | 320 | 3254 |
-| 4 (no_vest) | 2817 | 690 | 408 | 3915 |
-| 5 (machinery) | 4611 | 1262 | 764 | 6637 |
+| 0 (person) | 15794 | 2184 | 1185 | 19163 |
+| 1 (helmet) | 70478 | 10030 | 5446 | 85954 |
+| 2 (no_helmet) | 25290 | 3527 | 1778 | 30595 |
+| 3 (vest) | 4440 | 714 | 320 | 5474 |
+| 4 (no_vest) | 5634 | 690 | 408 | 6732 |
+| 5 (machinery) | 9222 | 1262 | 764 | 11248 |
 
 ## Ghi chú lớp hiếm
 
-- Lớp **3 (vest)** chỉ chiếm 3.47% tổng số bbox (3254/93737) — cần cân nhắc tăng cường dữ liệu hoặc oversampling.
-- Lớp **4 (no_vest)** chỉ chiếm 4.18% tổng số bbox (3915/93737) — cần cân nhắc tăng cường dữ liệu hoặc oversampling.
+- Lớp **3 (vest)** chỉ chiếm 3.44% tổng số bbox (5474/159166) — cần cân nhắc tăng cường dữ liệu hoặc oversampling.
+- Lớp **4 (no_vest)** chỉ chiếm 4.23% tổng số bbox (6732/159166) — cần cân nhắc tăng cường dữ liệu hoặc oversampling.
