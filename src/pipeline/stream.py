@@ -19,12 +19,20 @@ def main():
     ap.add_argument("--source", default="0", help="0=webcam hoặc path video")
     ap.add_argument("--config", default="configs/safety.yaml")
     ap.add_argument("--mock", action="store_true", help="chạy mock không cần model")
+    ap.add_argument("--detector", default="", help="path best.pt M1 — có thì inference thật, không thì fallback mock loop")
+    ap.add_argument("--telegram-token", default="", help="token bot Telegram (để trống = mock)")
+    ap.add_argument("--telegram-chat", default="", help="chat_id Telegram (để trống = mock)")
+    ap.add_argument("--reset-db", action="store_true", help="xóa logs/events.db trước khi chạy")
     args = ap.parse_args()
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     print(f"Config: {cfg['thresholds']}")
     engine = RuleEngine(cfg, fps=30)
-    db = EventDB("logs/events.db")
-    tg = TelegramAlerter(mock=True)
+    db_path = Path("logs/events.db")
+    if args.reset_db and db_path.exists():
+        db_path.unlink()
+    db = EventDB(str(db_path))
+    n0 = db.count()
+    tg = TelegramAlerter(token=args.telegram_token, chat_id=args.telegram_chat)
     t0, n = time.time(), 0
     if args.mock:
         print("MOCK: 90 frames + RuleEngine + DB + Telegram")
@@ -41,10 +49,16 @@ def main():
                 print(f"  frame {i}: tracks={len(out['tracks'])} alerts={out['alerts']}")
             n += 1
         fps = n / max(1e-6, time.time() - t0)
-        print(f"Done {n} frames | FPS={fps:.1f} | events={db.count()} | evidence in logs/evidence/")
+        print(f"Done {n} frames | FPS={fps:.1f} | new_events={db.count()-n0} | evidence in logs/evidence/")
         db.close()
         return
     src = 0 if args.source == "0" else args.source
+    detector = None
+    if args.detector:
+        # Import chậm để --mock không cần ultralytics/torch.
+        from ultralytics import YOLO
+        detector = YOLO(args.detector)
+        print(f"Detector: {args.detector}")
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         print(f"Cannot open source {src}")
@@ -55,14 +69,25 @@ def main():
         ret, frame = cap.read()
         if not ret: break
         frame = cv2.resize(frame, (640,640))
-        # TODO tuần 4: thay bằng inference YOLOv8m thật sau khi nhận weights từ Hoài
+        if detector is not None:
+            dets, person_conf = [], 0.0
+            for b in detector(frame, verbose=False)[0].boxes:
+                x1, y1, x2, y2 = (b.xyxy[0] / 640).tolist()
+                cls, conf = int(b.cls[0]), float(b.conf[0])
+                dets.append({"cls": cls, "conf": conf, "bbox": [x1, y1, x2, y2]})
+                if cls == 0:
+                    person_conf = max(person_conf, conf)
+            for al in engine.step(dets, n)["alerts"]:
+                p = save_evidence(frame, al["track_id"], al["type"], n)
+                db.insert(al["track_id"], al["type"], n, person_conf, p)
+                tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {n}", p)
+                print(f"  ALERT {al['type']} track={al['track_id']} frame={n}")
         n+=1
         if n%30==0:
             print(f"frame {n}: {frame.shape}")
-        if n>=90: break
     cap.release()
     fps = n / max(1e-6, time.time() - t0)
-    print(f"Done {n} frames | FPS={fps:.1f} | events={db.count()}")
+    print(f"Done {n} frames | FPS={fps:.1f} | new_events={db.count()-n0}")
     db.close()
 
 if __name__ == "__main__":

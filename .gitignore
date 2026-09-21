@@ -29,6 +29,10 @@ data/m1/train/
 data/m1/val/
 data/m1/test/
 data/m2/
+data/*.mp4
+*.mp4
+results_m1/
+.codegraph/
 *.npz
 *.pt
 *.pth
