@@ -113,3 +113,38 @@ def test_rule_engine_confirm_then_alert():
         alerts.extend(out["alerts"])
     types = {a["type"] for a in alerts}
     assert "zone" in types
+
+
+def _fall_cfg():
+    return {
+        "thresholds": {"machinery_distance": 0.08, "ppe_conf": 0.5, "fall_conf": 0.7},
+        "temporal": {"ppe_frames": 15, "fall_frames": 8, "cooldown_sec": 60, "window_size": 30},
+        "zones": {"forbidden": []},
+    }
+
+
+def _run_fall(probs_seq):
+    eng = RuleEngine(_fall_cfg(), fps=30)
+    person = {"cls": 0, "conf": 0.9, "bbox": [0.4, 0.2, 0.6, 0.8]}
+    alerts = []
+    for i, p in enumerate(probs_seq):
+        probs = None if p is None else {1: p}
+        alerts.extend(eng.step([person], i, fall_probs=probs)["alerts"])
+    return [a for a in alerts if a["type"] == "fall"]
+
+
+def test_fall_alert_after_n8_frames():
+    assert len(_run_fall([0.9] * 8)) == 1
+
+
+def test_fall_no_alert_below_conf_or_short():
+    assert _run_fall([0.6] * 20) == []   # duoi fall_conf 0.7
+    assert _run_fall([0.9] * 7) == []    # chua du N=8
+
+
+def test_fall_branch_off_without_m2():
+    assert _run_fall([None] * 20) == []  # khong truyen fall_probs -> bo qua nhanh fall
+
+
+def test_fall_cooldown_single_event():
+    assert len(_run_fall([0.9] * 100)) == 1

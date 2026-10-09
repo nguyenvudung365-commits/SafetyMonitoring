@@ -48,24 +48,35 @@ class RuleEngine:
         self.state = SafetyState(cooldown_sec=t["cooldown_sec"], fps=fps)
         self.history = {}  # (track_id, vtype) -> list[bool]
         self.n_ppe = t["ppe_frames"]
+        self.n_fall = t["fall_frames"]
+        self.fall_conf = cfg["thresholds"]["fall_conf"]
         self.polygons = [z["polygon"] for z in cfg.get("zones", {}).get("forbidden", [])]
 
-    def step(self, detections, frame_idx):
+    def step(self, detections, frame_idx, fall_probs=None):
+        """fall_probs: {track_id: P(falling|fallen)} từ M2; None = không chạy M2 (bỏ qua nhánh fall)."""
         persons, machines, others = split_detections(detections)
         tracks = self.tracker.update([p["bbox"] for p in persons])
         alerts = []
         seen = set()
         for tr in tracks:
             vtypes = evaluate_person(tr["bbox"], others, machines, self.polygons, self.cfg)
+            if fall_probs is not None and fall_probs.get(tr["track_id"], 0.0) > self.fall_conf:
+                vtypes.append("fall")
             seen.add(tr["track_id"])
-            for vt in ("no_helmet", "no_vest", "zone", "machinery"):
+            for vt in ("no_helmet", "no_vest", "zone", "machinery", "fall"):
+                if vt == "fall" and fall_probs is None:
+                    continue
+                n_conf = self.n_fall if vt == "fall" else self.n_ppe
                 key = (tr["track_id"], vt)
                 hist = self.history.setdefault(key, [])
                 hist.append(vt in vtypes)
-                if len(hist) > self.n_ppe:
-                    del hist[:-self.n_ppe]
-                if self.state.confirm(hist, self.n_ppe) and self.state.should_alert(
+                if len(hist) > n_conf:
+                    del hist[:-n_conf]
+                if self.state.confirm(hist, n_conf) and self.state.should_alert(
                     tr["track_id"], vt, frame_idx
                 ):
-                    alerts.append({"track_id": tr["track_id"], "type": vt, "frame": frame_idx})
+                    alerts.append({
+                        "track_id": tr["track_id"], "type": vt, "frame": frame_idx,
+                        "bbox": tr["bbox"],
+                    })
         return {"tracks": tracks, "alerts": alerts}

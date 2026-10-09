@@ -1,0 +1,23 @@
+# CONFIG DEMO cho clip 13002132 - vùng cấm giả định (khu vật liệu bên phải). Không phải vùng thật.
+# Mọi ngưỡng đọc từ file này, không hard-code trong .py
+
+zones:
+  # Đa giác vùng cấm trong hệ toạ độ ảnh (0-1 chuẩn hoá)
+  # Ví dụ: khu vực cần cẩu
+  forbidden:
+    - name: "demo_stockpile_zone"
+      polygon: [[0.65, 0.55], [1.0, 0.55], [1.0, 1.0], [0.65, 1.0]]
+
+thresholds:
+  machinery_distance: 0.08   # τsafe (chuẩn hoá theo chiều rộng ảnh), sẽ hiệu chỉnh theo bbox height
+  ppe_conf: 0.50
+  fall_conf: 0.70
+
+temporal:
+  ppe_frames: 15        # N cho PPE/vùng/máy (~0.5s @30fps)
+  fall_frames: 8        # N cho té ngã (~0.27s)
+  cooldown_sec: 60      # không báo lại cùng (ID, loại) trong 60s
+  window_size: 30       # cửa sổ TCN
+
+classes:
+  names: ["person", "helmet", "no_helmet", "vest", "no_vest", "machinery"]

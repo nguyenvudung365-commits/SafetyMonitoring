@@ -7,10 +7,57 @@ from storage.events import EventDB
 from alerts.telegram import TelegramAlerter
 
 
-def save_evidence(frame, track_id, vtype, frame_idx):
+_NAMES = {0: "person", 1: "helmet", 2: "no_helmet", 3: "vest", 4: "no_vest", 5: "machinery"}
+_COLORS = {
+    0: (80, 200, 80), 1: (255, 200, 0), 2: (0, 0, 255),
+    3: (0, 255, 128), 4: (0, 140, 255), 5: (0, 255, 255),
+}
+
+
+def _xyxy(bbox, w, h):
+    x1, y1, x2, y2 = bbox
+    return int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)
+
+
+_VIOLATION_CLS = {"no_helmet": 2, "no_vest": 4, "machinery": 5}
+
+
+def violation_conf(dets, vtype, person_bbox, fallback):
+    """Conf cao nhất của detection đúng lớp vi phạm (tâm nằm trong bbox người; máy thì lấy mọi máy)."""
+    cls = _VIOLATION_CLS.get(vtype)
+    best = None
+    for d in dets:
+        if d["cls"] != cls:
+            continue
+        x1, y1, x2, y2 = d["bbox"]
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        px1, py1, px2, py2 = person_bbox
+        if cls == 5 or (px1 <= cx <= px2 and py1 <= cy <= py2):
+            best = d["conf"] if best is None else max(best, d["conf"])
+    return best if best is not None else fallback
+
+
+def save_evidence(frame, track_id, vtype, frame_idx, dets=None, person_bbox=None):
+    vis = frame.copy()
+    h, w = vis.shape[:2]
+    for d in dets or []:
+        x1, y1, x2, y2 = _xyxy(d["bbox"], w, h)
+        c = _COLORS.get(d["cls"], (180, 180, 180))
+        cv2.rectangle(vis, (x1, y1), (x2, y2), c, 1)
+        cv2.putText(
+            vis, f"{_NAMES.get(d['cls'], d['cls'])} {d['conf']:.2f}",
+            (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, c, 1, cv2.LINE_AA,
+        )
+    if person_bbox:
+        x1, y1, x2, y2 = _xyxy(person_bbox, w, h)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 0, 255), 3)
+    cv2.putText(
+        vis, f"{vtype}  id={track_id}  f={frame_idx}",
+        (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA,
+    )
     out = Path(f"logs/evidence/{vtype}_{track_id}_{frame_idx:06d}.jpg")
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), frame)
+    cv2.imwrite(str(out), vis)
     return str(out)
 
 
@@ -23,7 +70,9 @@ def main():
     ap.add_argument("--telegram-token", default="", help="token bot Telegram (để trống = mock)")
     ap.add_argument("--telegram-chat", default="", help="chat_id Telegram (để trống = mock)")
     ap.add_argument("--reset-db", action="store_true", help="xóa logs/events.db trước khi chạy")
+    ap.add_argument("--imgsz", type=int, default=640, help="kích thước resize + inference (mặc định 640 khớp train M1)")
     args = ap.parse_args()
+    sz = args.imgsz
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     print(f"Config: {cfg['thresholds']}")
     engine = RuleEngine(cfg, fps=30)
@@ -42,7 +91,7 @@ def main():
             out = engine.step([person, no_h], i)
             frame = np.zeros((640, 640, 3), dtype=np.uint8)
             for al in out["alerts"]:
-                p = save_evidence(frame, al["track_id"], al["type"], i)
+                p = save_evidence(frame, al["track_id"], al["type"], i, [person, no_h], al.get("bbox"))
                 db.insert(al["track_id"], al["type"], i, 0.90, p)
                 tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {i}", p)
             if i % 30 == 0:
@@ -65,21 +114,28 @@ def main():
         db.close()
         return
     n=0
+    t_read = t_infer = 0.0
     while True:
+        t1 = time.time()
         ret, frame = cap.read()
         if not ret: break
-        frame = cv2.resize(frame, (640,640))
+        frame = cv2.resize(frame, (sz, sz))
+        t_read += time.time() - t1
         if detector is not None:
             dets, person_conf = [], 0.0
-            for b in detector(frame, verbose=False)[0].boxes:
-                x1, y1, x2, y2 = (b.xyxy[0] / 640).tolist()
+            t2 = time.time()
+            res = detector(frame, imgsz=sz, verbose=False)[0]
+            t_infer += time.time() - t2
+            for b in res.boxes:
+                x1, y1, x2, y2 = (b.xyxy[0] / sz).tolist()
                 cls, conf = int(b.cls[0]), float(b.conf[0])
                 dets.append({"cls": cls, "conf": conf, "bbox": [x1, y1, x2, y2]})
                 if cls == 0:
                     person_conf = max(person_conf, conf)
             for al in engine.step(dets, n)["alerts"]:
-                p = save_evidence(frame, al["track_id"], al["type"], n)
-                db.insert(al["track_id"], al["type"], n, person_conf, p)
+                p = save_evidence(frame, al["track_id"], al["type"], n, dets, al.get("bbox"))
+                conf = violation_conf(dets, al["type"], al["bbox"], person_conf)
+                db.insert(al["track_id"], al["type"], n, conf, p)
                 tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {n}", p)
                 print(f"  ALERT {al['type']} track={al['track_id']} frame={n}")
         n+=1
@@ -88,6 +144,8 @@ def main():
     cap.release()
     fps = n / max(1e-6, time.time() - t0)
     print(f"Done {n} frames | FPS={fps:.1f} | new_events={db.count()-n0}")
+    if n:
+        print(f"imgsz={sz} | decode+resize={1000*t_read/n:.1f} ms/frame | inference={1000*t_infer/n:.1f} ms/frame")
     db.close()
 
 if __name__ == "__main__":
