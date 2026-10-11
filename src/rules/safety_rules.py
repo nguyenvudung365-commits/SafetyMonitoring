@@ -55,17 +55,29 @@ def _in_upper_third(person_bbox, item_bbox):
     return px1 <= cx <= px2 and py1 <= cy <= py1 + h / 3.0
 
 
+def _in_torso(person_bbox, item_bbox):
+    """Áo gắn người nếu tâm item nằm trong vùng thân (1/6 → 2/3 chiều cao từ đỉnh bbox person)."""
+    px1, py1, px2, py2 = person_bbox
+    h = py2 - py1
+    cx, cy = bbox_center(item_bbox)
+    return px1 <= cx <= px2 and py1 + h / 6.0 <= cy <= py1 + 2 * h / 3.0
+
+
 def ppe_flags(person_bbox, detections, conf_th=0.50):
-    """detections: list of {cls, conf, bbox}. Trả {no_helmet, no_vest}."""
+    """detections: list of {cls, conf, bbox}. Mũ xét 1/3 trên, áo xét vùng thân. Trả {no_helmet, no_vest}."""
     no_helmet = False
     no_vest = False
     for d in detections:
         if d.get("conf", 1.0) < conf_th:
             continue
         cls = d["cls"]
-        if cls not in (CLASS_HELMET, CLASS_NO_HELMET, CLASS_VEST, CLASS_NO_VEST):
-            continue
-        if not _in_upper_third(person_bbox, d["bbox"]):
+        if cls in (CLASS_HELMET, CLASS_NO_HELMET):
+            if not _in_upper_third(person_bbox, d["bbox"]):
+                continue
+        elif cls in (CLASS_VEST, CLASS_NO_VEST):
+            if not _in_torso(person_bbox, d["bbox"]):
+                continue
+        else:
             continue
         if cls == CLASS_NO_HELMET:
             no_helmet = True

@@ -3,10 +3,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from rules.safety_rules import (
     point_in_polygon, SafetyState, machinery_violation,
-    zone_violation, ppe_flags, CLASS_NO_HELMET, CLASS_HELMET, CLASS_NO_VEST,
+    zone_violation, ppe_flags, CLASS_NO_HELMET, CLASS_HELMET, CLASS_NO_VEST, CLASS_VEST,
 )
 from tracking.bytetrack import ByteTracker, iou
-from pipeline.postprocess import RuleEngine, split_detections, evaluate_person
+from pipeline.postprocess import RuleEngine, split_detections, evaluate_person, merge_alerts
 
 
 def test_zone_inside():
@@ -148,3 +148,40 @@ def test_fall_branch_off_without_m2():
 
 def test_fall_cooldown_single_event():
     assert len(_run_fall([0.9] * 100)) == 1
+
+
+def test_ppe_vest_on_torso_detected():
+    person = [0.4, 0.2, 0.6, 0.8]                        # h=0.6, thân y 0.3..0.6
+    no_vest = {"cls": CLASS_NO_VEST, "conf": 0.9, "bbox": [0.42, 0.40, 0.58, 0.55]}  # tâm y=0.475
+    assert ppe_flags(person, [no_vest], conf_th=0.5)["no_vest"] is True
+
+
+def test_ppe_vest_on_torso_overrides():
+    person = [0.4, 0.2, 0.6, 0.8]
+    dets = [
+        {"cls": CLASS_NO_VEST, "conf": 0.9, "bbox": [0.42, 0.40, 0.58, 0.55]},
+        {"cls": CLASS_VEST, "conf": 0.9, "bbox": [0.42, 0.38, 0.58, 0.56]},
+    ]
+    assert ppe_flags(person, dets, conf_th=0.5)["no_vest"] is False
+
+
+def test_ppe_vest_at_legs_ignored():
+    person = [0.4, 0.2, 0.6, 0.8]
+    legs = {"cls": CLASS_NO_VEST, "conf": 0.9, "bbox": [0.42, 0.65, 0.58, 0.78]}   # tâm y=0.715 > 0.6
+    assert ppe_flags(person, [legs], conf_th=0.5)["no_vest"] is False
+
+
+def test_merge_alerts_same_track():
+    out = merge_alerts([
+        {"track_id": 4, "type": "no_helmet", "frame": 10, "bbox": [0, 0, 1, 1]},
+        {"track_id": 4, "type": "no_vest", "frame": 10, "bbox": [0, 0, 1, 1]},
+        {"track_id": 7, "type": "zone", "frame": 10, "bbox": [0, 0, 1, 1]},
+    ])
+    types = {a["track_id"]: a["type"] for a in out}
+    assert types == {4: "no_helmet+no_vest", 7: "zone"}
+
+
+def test_cooldown_scales_with_video_fps():
+    cfg = _fall_cfg()
+    assert RuleEngine(cfg, fps=25).state.cooldown_frames == 60 * 25
+    assert RuleEngine(cfg, fps=30).state.cooldown_frames == 60 * 30

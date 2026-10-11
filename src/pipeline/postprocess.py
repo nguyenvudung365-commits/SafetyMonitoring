@@ -79,4 +79,17 @@ class RuleEngine:
                         "track_id": tr["track_id"], "type": vt, "frame": frame_idx,
                         "bbox": tr["bbox"],
                     })
-        return {"tracks": tracks, "alerts": alerts}
+        return {"tracks": tracks, "alerts": merge_alerts(alerts)}
+
+
+def merge_alerts(alerts):
+    """Gộp các vi phạm cùng track_id xác nhận trong cùng frame thành 1 event (type nối bằng '+')."""
+    by_id = {}
+    for al in alerts:
+        if al["track_id"] in by_id:
+            by_id[al["track_id"]]["types"].append(al["type"])
+        else:
+            by_id[al["track_id"]] = {**al, "types": [al["type"]]}
+    for al in by_id.values():
+        al["type"] = "+".join(al["types"])
+    return list(by_id.values())

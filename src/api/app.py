@@ -1,5 +1,6 @@
 """REST API đọc sự kiện vi phạm từ SQLite + phục vụ ảnh minh chứng."""
 from pathlib import Path
+import os
 import sys
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -7,7 +8,8 @@ from fastapi.responses import FileResponse
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from storage.events import EventDB
 
-DB_PATH = "logs/events.db"
+LOG_DIR = Path(os.environ.get("SAFETY_LOG_DIR", "logs"))  # khớp --out-dir của stream.py
+DB_PATH = str(LOG_DIR / "events.db")
 
 app = FastAPI(title="SafetyMonitoring API")
 
@@ -47,7 +49,7 @@ def get_evidence(filename: str):
     safe = Path(filename).name
     if safe != filename or ".." in filename:
         raise HTTPException(status_code=400, detail="invalid filename")
-    path = Path("logs/evidence") / safe
+    path = LOG_DIR / "evidence" / safe
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(str(path))

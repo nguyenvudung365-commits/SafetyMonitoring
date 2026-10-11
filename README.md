@@ -35,18 +35,49 @@ pytest -q
 ## 5. Pipeline
 ```bash
 python src/pipeline/stream.py --mock
-python src/pipeline/stream.py --reset-db --source data/construction_test.mp4 \
-  --detector results_m1/runs/detect/train-2/weights/best.pt
+python src/pipeline/stream.py --reset-db --source data/13002132_3840_2160_30fps.mp4 --detector results_m1/runs/detect/train-2/weights/best.pt
 ```
+Windows cmd: viết trên 1 dòng (hoặc xuống dòng bằng `^`, không dùng `\`).
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `--source` | `0` | `0` = webcam, hoặc đường dẫn MP4/RTSP |
+| `--detector` | rỗng | `best.pt` M1; rỗng = không inference |
+| `--mock` | tắt | chạy 90 frame giả, không cần model |
+| `--config` | `configs/safety.yaml` | file ngưỡng/vùng cấm (`configs/safety_demo.yaml` = vùng cấm giả định cho clip demo) |
+| `--imgsz` | `640` | kích thước resize + inference (640 khớp lúc train) |
+| `--device` | rỗng | rỗng = GPU nếu có, `cpu`, `0`... |
+| `--out-dir` | `logs` | nơi ghi `events.db` + `evidence/` |
+| `--reset-db` | tắt | xoá DB **và** ảnh evidence cũ trước khi chạy |
+| `--telegram-token/--telegram-chat` | rỗng | rỗng = in `[TELEGRAM MOCK]` |
+
+Log cuối in `FPS`, `new_events` và thời gian `decode+resize` / `inference` (ms/frame) để biết nút thắt.
+
+Ảnh evidence `logs/evidence/<loại>_<track_id>_<frame>.jpg`: box đỏ dày = người vi phạm, box mỏng + nhãn = mọi detection M1. Cùng ID nhiều vi phạm trong cùng frame được gộp, ví dụ `no_helmet-no_vest_4_000120.jpg`.
 
 ## 6. API
 ```bash
 uvicorn src.api.app:app --port 8000
 # /health /events /events/count /evidence/{file} /docs
 ```
+Nếu pipeline chạy với `--out-dir` khác `logs`, đặt biến môi trường `SAFETY_LOG_DIR` cùng đường dẫn trước khi chạy uvicorn.
 
-## 7. Cấu hình
-`safety.yaml` — `ppe_frames` N=15, `cooldown_sec` 60, `ppe_conf` 0.50.
+## 7. Tầng luật (`configs/safety.yaml`)
+- **PPE:** `no_helmet` xét trong 1/3 trên bbox người; `no_vest` xét vùng thân (1/6 → 2/3 chiều cao). Detection dưới `ppe_conf` (0.50) bị bỏ qua.
+- **Vùng cấm:** điểm chân (giữa cạnh dưới bbox) nằm trong polygon `zones.forbidden`.
+- **Máy móc:** khoảng cách chân người → tâm máy < `machinery_distance` (0.08, nới theo chiều cao bbox).
+- **Té ngã:** `RuleEngine.step(..., fall_probs={track_id: p})` — báo khi p > `fall_conf` (0.70) đủ `fall_frames` (8) frame. Chưa có M2 thì không truyền `fall_probs`, nhánh này tắt.
+- **Xác nhận + cooldown:** PPE/vùng/máy cần `ppe_frames` (15) frame liên tiếp; cùng (ID, loại) không báo lại trong `cooldown_sec` (60 s). Số frame cooldown tính theo FPS thật của video.
+
+## 8. Chạy trên Kaggle
+Xem [reports/huong_dan_kaggle.md](reports/huong_dan_kaggle.md): upload `best.pt` + video thành Kaggle Dataset, `git clone` repo, chạy với `--out-dir /kaggle/working/logs`.
+
+## Trạng thái
+- M1: train xong, chạy được trong pipeline. Validation: P 0.9051 / R 0.8053 / mAP50 0.8668 / mAP50-95 0.6325.
+- M2 (té ngã): chưa tích hợp — chờ `best_tcn.pt`.
+- Tracker `src/tracking/bytetrack.py` là bản IoU greedy tự viết (chưa Kalman); ID có thể đổi khi người đi chéo nhau.
+- Chưa có số FAR/h / Precision–Recall trên video thật; event demo chưa được kiểm tay hết.
+- FPS phụ thuộc máy: luôn ghi kèm GPU khi báo cáo.
 
 ## Lưu ý
-Validation M1: P 0.9051 / R 0.8053 / mAP50 0.8668 / mAP50-95 0.6325. `best.pt`, `*.mp4`, `logs/`, `results_m1/` không push.
+`best.pt`, `*.mp4`, `logs/`, `results_m1/` không push (đã có trong `.gitignore`).
