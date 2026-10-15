@@ -3,7 +3,7 @@ from rules.safety_rules import (
     CLASS_PERSON, CLASS_MACHINERY,
     ppe_flags, zone_violation, machinery_violation, load_config,
 )
-from tracking.bytetrack import ByteTracker
+from tracking.bytetrack import ByteTracker, iou
 
 
 def split_detections(dets):
@@ -19,10 +19,11 @@ def split_detections(dets):
     return persons, machines, others
 
 
-def evaluate_person(person_bbox, others, machines, polygons, cfg):
+def evaluate_person(person_bbox, others, machines, polygons, cfg, person_conf=1.0):
     th = cfg["thresholds"]
     flags = ppe_flags(person_bbox, others, conf_th=th["ppe_conf"])
-    in_zone = zone_violation(person_bbox, polygons)
+    # vùng cấm cần person conf cao hơn ngưỡng detect mặc định để loại móc cẩu/vật nhỏ bị nhận nhầm
+    in_zone = person_conf >= th.get("zone_person_conf", 0.0) and zone_violation(person_bbox, polygons)
     near_m = machinery_violation(
         person_bbox, [m["bbox"] for m in machines], tau=th["machinery_distance"]
     )
@@ -50,16 +51,22 @@ class RuleEngine:
         self.n_ppe = t["ppe_frames"]
         self.n_fall = t["fall_frames"]
         self.fall_conf = cfg["thresholds"]["fall_conf"]
+        self.dedup_frames = int(t.get("dedup_sec", 3) * fps)
+        self.dedup_iou = cfg["thresholds"].get("dedup_iou", 0.2)
+        self.alerted = {}  # track_id -> {types, bbox, last_seen}: để gộp sự kiện khi tracker đổi id
         self.polygons = [z["polygon"] for z in cfg.get("zones", {}).get("forbidden", [])]
 
     def step(self, detections, frame_idx, fall_probs=None):
         """fall_probs: {track_id: P(falling|fallen)} từ M2; None = không chạy M2 (bỏ qua nhánh fall)."""
         persons, machines, others = split_detections(detections)
         tracks = self.tracker.update([p["bbox"] for p in persons])
+        conf_by_box = {tuple(p["bbox"]): p["conf"] for p in persons}
         alerts = []
         seen = set()
+        seen_now = {t["track_id"] for t in tracks}
         for tr in tracks:
-            vtypes = evaluate_person(tr["bbox"], others, machines, self.polygons, self.cfg)
+            vtypes = evaluate_person(tr["bbox"], others, machines, self.polygons, self.cfg,
+                                   person_conf=conf_by_box.get(tuple(tr["bbox"]), 1.0))
             if fall_probs is not None and fall_probs.get(tr["track_id"], 0.0) > self.fall_conf:
                 vtypes.append("fall")
             seen.add(tr["track_id"])
@@ -75,11 +82,30 @@ class RuleEngine:
                 if self.state.confirm(hist, n_conf) and self.state.should_alert(
                     tr["track_id"], vt, frame_idx
                 ):
+                    if self._is_duplicate(tr, vt, frame_idx, seen_now):
+                        self.alerted.setdefault(tr["track_id"], {"types": set()})["types"].add(vt)
+                        continue
                     alerts.append({
                         "track_id": tr["track_id"], "type": vt, "frame": frame_idx,
                         "bbox": tr["bbox"],
                     })
+        for al in alerts:
+            rec = self.alerted.setdefault(al["track_id"], {"types": set()})
+            rec["types"].update(al["type"].split("+"))
+        for tr in tracks:
+            rec = self.alerted.get(tr["track_id"])
+            if rec is not None:
+                rec["bbox"], rec["last_seen"] = tr["bbox"], frame_idx
         return {"tracks": tracks, "alerts": merge_alerts(alerts)}
+
+    def _is_duplicate(self, tr, vt, frame_idx, seen_now):
+        """Cùng loại vi phạm đã báo cho một track vừa mất id ở gần vị trí này -> cùng một người."""
+        for tid, rec in self.alerted.items():
+            if tid == tr["track_id"] or tid in seen_now or vt not in rec["types"]:
+                continue
+            if frame_idx - rec["last_seen"] <= self.dedup_frames and iou(tr["bbox"], rec["bbox"]) >= self.dedup_iou:
+                return True
+        return False
 
 
 def merge_alerts(alerts):

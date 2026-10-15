@@ -185,3 +185,43 @@ def test_cooldown_scales_with_video_fps():
     cfg = _fall_cfg()
     assert RuleEngine(cfg, fps=25).state.cooldown_frames == 60 * 25
     assert RuleEngine(cfg, fps=30).state.cooldown_frames == 60 * 30
+
+
+def _zone_cfg(**th):
+    return {
+        "thresholds": {"machinery_distance": 0.08, "ppe_conf": 0.5, "fall_conf": 0.7, **th},
+        "temporal": {"ppe_frames": 3, "fall_frames": 8, "cooldown_sec": 60, "window_size": 30},
+        "zones": {"forbidden": [{"name": "z", "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}]},
+    }
+
+
+def test_zone_ignores_low_conf_person():
+    eng = RuleEngine(_zone_cfg(zone_person_conf=0.5), fps=30)
+    hook = {"cls": 0, "conf": 0.3, "bbox": [0.4, 0.2, 0.45, 0.4]}
+    alerts = [a for i in range(10) for a in eng.step([hook], i)["alerts"]]
+    assert alerts == []
+    hook["conf"] = 0.6
+    eng2 = RuleEngine(_zone_cfg(zone_person_conf=0.5), fps=30)
+    assert any(a["type"] == "zone" for i in range(10) for a in eng2.step([hook], i)["alerts"])
+
+
+def test_dedup_when_tracker_changes_id():
+    eng = RuleEngine(_zone_cfg(zone_person_conf=0.5), fps=30)
+    p = {"cls": 0, "conf": 0.9, "bbox": [0.4, 0.2, 0.6, 0.8]}
+    alerts = [a for i in range(5) for a in eng.step([p], i)["alerts"]]
+    assert len(alerts) == 1
+    # người biến mất 1 frame rồi hiện lại với id mới (ép bằng cách xoá track cũ)
+    eng.tracker.tracks.clear()
+    p2 = {"cls": 0, "conf": 0.9, "bbox": [0.41, 0.2, 0.61, 0.8]}
+    more = [a for i in range(5, 12) for a in eng.step([p2], i)["alerts"]]
+    assert more == []
+
+
+def test_no_dedup_for_far_person():
+    eng = RuleEngine(_zone_cfg(zone_person_conf=0.5), fps=30)
+    a = {"cls": 0, "conf": 0.9, "bbox": [0.1, 0.2, 0.2, 0.8]}
+    b = {"cls": 0, "conf": 0.9, "bbox": [0.7, 0.2, 0.8, 0.8]}
+    alerts = [x for i in range(5) for x in eng.step([a], i)["alerts"]]
+    eng.tracker.tracks.clear()
+    alerts += [x for i in range(5, 12) for x in eng.step([b], i)["alerts"]]
+    assert len(alerts) == 2

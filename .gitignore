@@ -62,3 +62,4 @@ reports/*.pdf
 # Giữ lại cấu trúc thư mục
 !data/.gitkeep
 !weights/.gitkeep
+logs_*/

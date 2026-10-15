@@ -64,10 +64,11 @@ Nếu pipeline chạy với `--out-dir` khác `logs`, đặt biến môi trườ
 
 ## 7. Tầng luật (`configs/safety.yaml`)
 - **PPE:** `no_helmet` xét trong 1/3 trên bbox người; `no_vest` xét vùng thân (1/6 → 2/3 chiều cao). Detection dưới `ppe_conf` (0.50) bị bỏ qua.
-- **Vùng cấm:** điểm chân (giữa cạnh dưới bbox) nằm trong polygon `zones.forbidden`.
+- **Vùng cấm:** điểm chân (giữa cạnh dưới bbox) nằm trong polygon `zones.forbidden`, và person conf ≥ `zone_person_conf` (0.50) để loại móc cẩu/vật nhỏ bị nhận nhầm thành người.
 - **Máy móc:** khoảng cách chân người → tâm máy < `machinery_distance` (0.08, nới theo chiều cao bbox).
 - **Té ngã:** `RuleEngine.step(..., fall_probs={track_id: p})` — báo khi p > `fall_conf` (0.70) đủ `fall_frames` (8) frame. Chưa có M2 thì không truyền `fall_probs`, nhánh này tắt.
 - **Xác nhận + cooldown:** PPE/vùng/máy cần `ppe_frames` (15) frame liên tiếp; cùng (ID, loại) không báo lại trong `cooldown_sec` (60 s). Số frame cooldown tính theo FPS thật của video.
+- **Gộp sự kiện khi tracker đổi ID:** nếu cùng loại vi phạm đã báo cho một track vừa biến mất, cách ≤ `dedup_sec` (3 s) và bbox chồng IoU ≥ `dedup_iou` (0.20) thì không báo lại.
 
 ## 8. Chạy trên Kaggle
 Xem [reports/huong_dan_kaggle.md](reports/huong_dan_kaggle.md): upload `best.pt` + video thành Kaggle Dataset, `git clone` repo, chạy với `--out-dir /kaggle/working/logs`.
@@ -75,9 +76,11 @@ Xem [reports/huong_dan_kaggle.md](reports/huong_dan_kaggle.md): upload `best.pt`
 ## Trạng thái
 - M1: train xong, chạy được trong pipeline. Validation: P 0.9051 / R 0.8053 / mAP50 0.8668 / mAP50-95 0.6325.
 - M2 (té ngã): chưa tích hợp — chờ `best_tcn.pt`.
-- Tracker `src/tracking/bytetrack.py` là bản IoU greedy tự viết (chưa Kalman); ID có thể đổi khi người đi chéo nhau.
+- Tracker `src/tracking/bytetrack.py` là bản IoU greedy tự viết (chưa Kalman); ID có thể đổi khi người đi chéo nhau (đã giảm trùng sự kiện bằng bước gộp ở mục 7, chưa triệt để).
+- Luật `no_helmet`/`machinery` mới chạy ra sự kiện, chưa kiểm chứng đúng ngữ cảnh (clip máy xúc chỉ có người ngồi trong cabin). Clip 1:36 trên laptop: 14 → 11 sự kiện sau khi thêm lọc vùng cấm + gộp sự kiện (xem tay, 1 clip).
+- Lỗi đã biết: vest phản quang màu nhạt bị báo `no_vest`.
 - Chưa có số FAR/h / Precision–Recall trên video thật; event demo chưa được kiểm tay hết.
 - FPS phụ thuộc máy: luôn ghi kèm GPU khi báo cáo.
 
 ## Lưu ý
-`best.pt`, `*.mp4`, `logs/`, `results_m1/` không push (đã có trong `.gitignore`).
+`best.pt`, `*.mp4`, `logs/`, `results_m1/` không push (đã có trong `.gitignore`), cũng như các thư mục `logs_*/`.

@@ -11,11 +11,14 @@ zones:
 thresholds:
   machinery_distance: 0.08   # τsafe (chuẩn hoá theo chiều rộng ảnh), sẽ hiệu chỉnh theo bbox height
   ppe_conf: 0.50
+  zone_person_conf: 0.50   # person conf tối thiểu cho luật vùng cấm (loại móc cẩu conf 0.27-0.32)
+  dedup_iou: 0.20          # gộp sự kiện khi tracker đổi id: bbox chồng >= 0.2 với người đã báo
   fall_conf: 0.70
 
 temporal:
   ppe_frames: 15        # N cho PPE/vùng/máy (~0.5s @30fps)
   fall_frames: 8        # N cho té ngã (~0.27s)
+  dedup_sec: 3          # cửa sổ gộp sự kiện khi đổi id
   cooldown_sec: 60      # không báo lại cùng (ID, loại) trong 60s
   window_size: 30       # cửa sổ TCN
 
