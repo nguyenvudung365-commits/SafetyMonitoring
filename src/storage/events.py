@@ -1,4 +1,4 @@
-"""SQLite event log — schema tuần 7: id, track_id, violation_type, timestamp, frame_idx, confidence, image_path."""
+"""SQLite event log — schema tuần 7: id, track_id, violation_type, timestamp, frame_idx, confidence, image_path (+ source, video_time_sec từ migrate tuần 8)."""
 import sqlite3
 import time
 from pathlib import Path
@@ -16,38 +16,51 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+_COLS = "id, track_id, violation_type, timestamp, frame_idx, confidence, image_path, source, video_time_sec"
+_MIGRATE = (("source", "TEXT"), ("video_time_sec", "REAL"))
+
+
 class EventDB:
     def __init__(self, db_path="logs/events.db"):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path)
         self.conn.execute(SCHEMA)
+        # DB cũ thiếu cột mới -> ALTER TABLE
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(events)")}
+        for name, typ in _MIGRATE:
+            if name not in have:
+                self.conn.execute(f"ALTER TABLE events ADD COLUMN {name} {typ}")
         self.conn.commit()
 
-    def insert(self, track_id, violation_type, frame_idx, confidence=None, image_path=None):
+    def insert(self, track_id, violation_type, frame_idx, confidence=None, image_path=None,
+               source=None, video_time_sec=None):
         cur = self.conn.execute(
-            "INSERT INTO events (track_id, violation_type, timestamp, frame_idx, confidence, image_path) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (track_id, violation_type, time.time(), frame_idx, confidence, image_path),
+            "INSERT INTO events (track_id, violation_type, timestamp, frame_idx, confidence, image_path, "
+            "source, video_time_sec) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (track_id, violation_type, time.time(), frame_idx, confidence, image_path,
+             source, video_time_sec),
         )
         self.conn.commit()
         return cur.lastrowid
 
-    def query(self, vtype=None, limit=100):
+    def query(self, vtype=None, limit=100, source=None):
+        """vtype khớp cả event gộp (vd 'no_vest' khớp 'no_vest+machinery')."""
+        where, params = [], []
         if vtype:
-            rows = self.conn.execute(
-                "SELECT id, track_id, violation_type, timestamp, frame_idx, confidence, image_path "
-                "FROM events WHERE violation_type=? ORDER BY id DESC LIMIT ?",
-                (vtype, limit),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT id, track_id, violation_type, timestamp, frame_idx, confidence, image_path "
-                "FROM events ORDER BY id DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            where.append("instr('+' || violation_type || '+', '+' || ? || '+') > 0")
+            params.append(vtype)
+        if source:
+            where.append("source = ?")
+            params.append(source)
+        sql = f"SELECT {_COLS} FROM events"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        rows = self.conn.execute(sql, (*params, limit)).fetchall()
         return [
             {"id": r[0], "track_id": r[1], "violation_type": r[2], "timestamp": r[3],
-             "frame_idx": r[4], "confidence": r[5], "image_path": r[6]}
+             "frame_idx": r[4], "confidence": r[5], "image_path": r[6],
+             "source": r[7], "video_time_sec": r[8]}
             for r in rows
         ]
 

@@ -30,13 +30,36 @@ def euclidean(p, q):
 def bbox_center(bbox):
     x1,y1,x2,y2 = bbox; return ((x1+x2)/2, (y1+y2)/2)
 
-def machinery_violation(person_bbox, machinery_bboxes, tau=0.08):
-    """Khoảng cách Euclid giữa chân người và tâm máy gần nhất < τ (hiệu chỉnh theo h person)."""
+def bbox_edge_distance(point, bbox):
+    """Khoảng cách Euclid từ điểm tới bbox [x1,y1,x2,y2] (gần nhất tới cạnh); 0 nếu điểm nằm trong bbox."""
+    x, y = point
+    x1, y1, x2, y2 = bbox
+    dx = max(x1 - x, 0.0, x - x2)
+    dy = max(y1 - y, 0.0, y - y2)
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def overlap_ratio(inner, outer):
+    """Diện tích(inner ∩ outer) / diện tích(inner); 0 nếu inner suy biến."""
+    ix1, iy1 = max(inner[0], outer[0]), max(inner[1], outer[1])
+    ix2, iy2 = min(inner[2], outer[2]), min(inner[3], outer[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    area = max(0.0, inner[2] - inner[0]) * max(0.0, inner[3] - inner[1])
+    return inter / area if area > 0 else 0.0
+
+
+def machinery_violation(person_bbox, machinery_bboxes, k=0.5, cabin_overlap=0.8):
+    """Chân người cách CẠNH bbox máy gần nhất < k * chiều cao người (ngưỡng tỉ lệ phối cảnh:
+    người xa, h nhỏ -> ngưỡng nhỏ). Máy mà bbox người nằm >= cabin_overlap bên trong
+    (người ngồi trong cabin) bị bỏ qua, với điều kiện chân người còn nằm trong bbox máy
+    (y2 người <= y2 máy); chân vượt dưới cạnh đáy máy = đứng trước máy, vẫn xét."""
     foot = foot_point(person_bbox)
-    h = person_bbox[3]-person_bbox[1]
-    tau_adj = tau * (1 + (1-h))  # vật xa (h nhỏ) -> τ lớn hơn
+    h = person_bbox[3] - person_bbox[1]
+    tau_px = k * h
     for mb in machinery_bboxes:
-        if euclidean(foot, bbox_center(mb)) < tau_adj:
+        if overlap_ratio(person_bbox, mb) >= cabin_overlap and person_bbox[3] <= mb[3]:
+            continue
+        if bbox_edge_distance(foot, mb) < tau_px:
             return True
     return False
 
@@ -64,30 +87,34 @@ def _in_torso(person_bbox, item_bbox):
 
 
 def ppe_flags(person_bbox, detections, conf_th=0.50):
-    """detections: list of {cls, conf, bbox}. Mũ xét 1/3 trên, áo xét vùng thân. Trả {no_helmet, no_vest}."""
-    no_helmet = False
-    no_vest = False
+    """detections: list of {cls, conf, bbox}. Mũ xét 1/3 trên, áo xét vùng thân. Trả {no_helmet, no_vest}.
+
+    Không phụ thuộc thứ tự detection: với mỗi cặp (helmet/no_helmet), (vest/no_vest) lấy detection
+    conf cao nhất gắn với người; hoà conf thì ưu tiên lớp tuân thủ (helmet/vest) để tránh báo nhầm."""
+    best = {}  # cặp -> (conf, is_violation)
     for d in detections:
-        if d.get("conf", 1.0) < conf_th:
+        conf = d.get("conf", 1.0)
+        if conf < conf_th:
             continue
         cls = d["cls"]
         if cls in (CLASS_HELMET, CLASS_NO_HELMET):
             if not _in_upper_third(person_bbox, d["bbox"]):
                 continue
+            pair = "helmet"
         elif cls in (CLASS_VEST, CLASS_NO_VEST):
             if not _in_torso(person_bbox, d["bbox"]):
                 continue
+            pair = "vest"
         else:
             continue
-        if cls == CLASS_NO_HELMET:
-            no_helmet = True
-        if cls == CLASS_NO_VEST:
-            no_vest = True
-        if cls == CLASS_HELMET:
-            no_helmet = False
-        if cls == CLASS_VEST:
-            no_vest = False
-    return {"no_helmet": no_helmet, "no_vest": no_vest}
+        is_viol = cls in (CLASS_NO_HELMET, CLASS_NO_VEST)
+        cur = best.get(pair)
+        if cur is None or conf > cur[0] or (conf == cur[0] and cur[1] and not is_viol):
+            best[pair] = (conf, is_viol)
+    return {
+        "no_helmet": bool(best.get("helmet", (0, False))[1]),
+        "no_vest": bool(best.get("vest", (0, False))[1]),
+    }
 
 
 class SafetyState:

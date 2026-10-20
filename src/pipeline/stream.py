@@ -1,10 +1,11 @@
 """Khung pipeline đọc video — mock + RuleEngine + event log + Telegram + ảnh minh chứng."""
-import argparse, sys, time, cv2, yaml, numpy as np
+import argparse, json, sys, time, cv2, yaml, numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipeline.postprocess import RuleEngine
 from storage.events import EventDB
 from alerts.telegram import TelegramAlerter
+from pipeline.run_meta import write_run_meta
 
 
 _NAMES = {0: "person", 1: "helmet", 2: "no_helmet", 3: "vest", 4: "no_vest", 5: "machinery"}
@@ -76,6 +77,7 @@ def main():
     ap.add_argument("--out-dir", default="logs", help="thư mục ghi events.db + evidence/ (Kaggle: /kaggle/working/logs)")
     ap.add_argument("--device", default="", help="'' = tự chọn (GPU nếu có), 'cpu', '0'...")
     ap.add_argument("--imgsz", type=int, default=640, help="kích thước resize + inference (mặc định 640 khớp train M1)")
+    ap.add_argument("--dump-dets", default="", help="ghi detection mỗi frame ra file .jsonl (để tools/sweep_rules.py chạy lại luật, không cần YOLO)")
     args = ap.parse_args()
     sz = args.imgsz
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
@@ -90,6 +92,7 @@ def main():
     db = EventDB(str(db_path))
     n0 = db.count()
     tg = TelegramAlerter(token=args.telegram_token, chat_id=args.telegram_chat)
+    cfg_thresholds = {"thresholds": cfg.get("thresholds"), "temporal": cfg.get("temporal")}
     t0, n = time.time(), 0
     if args.mock:
         print("MOCK: 90 frames + RuleEngine + DB + Telegram")
@@ -101,13 +104,15 @@ def main():
             frame = np.zeros((640, 640, 3), dtype=np.uint8)
             for al in out["alerts"]:
                 p = save_evidence(frame, al["track_id"], al["type"], i, [person, no_h], al.get("bbox"), out_dir)
-                db.insert(al["track_id"], al["type"], i, 0.90, p)
+                db.insert(al["track_id"], al["type"], i, 0.90, p, source="mock", video_time_sec=i / 30)
                 tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {i}", p)
             if i % 30 == 0:
                 print(f"  frame {i}: tracks={len(out['tracks'])} alerts={out['alerts']}")
             n += 1
         fps = n / max(1e-6, time.time() - t0)
         print(f"Done {n} frames | FPS={fps:.1f} | new_events={db.count()-n0} | evidence in {out_dir / 'evidence'}")
+        write_run_meta(out_dir, mode="mock", config=args.config, cfg=cfg_thresholds, frames=n,
+                       fps=round(fps, 2), new_events=db.count() - n0, imgsz=None)
         db.close()
         return
     src = 0 if args.source == "0" else args.source
@@ -131,37 +136,57 @@ def main():
         video_fps = 30  # webcam/RTSP hay trả 0 -> mặc định 30
     engine = RuleEngine(cfg, fps=video_fps)
     print(f"Video FPS={video_fps:.1f} -> cooldown {cfg['temporal']['cooldown_sec']}s = {int(cfg['temporal']['cooldown_sec']*video_fps)} frame")
+    dump = None
+    if args.dump_dets:
+        Path(args.dump_dets).parent.mkdir(parents=True, exist_ok=True)
+        dump = open(args.dump_dets, "w", encoding="utf-8")
+        dump.write(json.dumps({"meta": {"source": str(src), "fps": video_fps, "imgsz": sz,
+                                        "detector": args.detector}}) + "\n")
     n=0
     t_read = t_infer = 0.0
-    while True:
-        t1 = time.time()
-        ret, frame = cap.read()
-        if not ret: break
-        frame = cv2.resize(frame, (sz, sz))
-        t_read += time.time() - t1
-        if detector is not None:
-            dets, person_conf = [], 0.0
-            t2 = time.time()
-            res = detector(frame, imgsz=sz, device=device, verbose=False)[0]
-            t_infer += time.time() - t2
-            for b in res.boxes:
-                x1, y1, x2, y2 = (b.xyxy[0] / sz).tolist()
-                cls, conf = int(b.cls[0]), float(b.conf[0])
-                dets.append({"cls": cls, "conf": conf, "bbox": [x1, y1, x2, y2]})
-                if cls == 0:
-                    person_conf = max(person_conf, conf)
-            for al in engine.step(dets, n)["alerts"]:
-                p = save_evidence(frame, al["track_id"], al["type"], n, dets, al.get("bbox"), out_dir)
-                conf = violation_conf(dets, al["type"], al["bbox"], person_conf)
-                db.insert(al["track_id"], al["type"], n, conf, p)
-                tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {n}", p)
-                print(f"  ALERT {al['type']} track={al['track_id']} frame={n}")
-        n+=1
-        if n%30==0:
-            print(f"frame {n}: {frame.shape}")
+    try:
+        while True:
+            t1 = time.time()
+            ret, frame = cap.read()
+            if not ret: break
+            frame = cv2.resize(frame, (sz, sz))
+            t_read += time.time() - t1
+            if detector is not None:
+                dets, person_conf = [], 0.0
+                t2 = time.time()
+                res = detector(frame, imgsz=sz, device=device, verbose=False)[0]
+                t_infer += time.time() - t2
+                for b in res.boxes:
+                    x1, y1, x2, y2 = (b.xyxy[0] / sz).tolist()
+                    cls, conf = int(b.cls[0]), float(b.conf[0])
+                    dets.append({"cls": cls, "conf": conf, "bbox": [x1, y1, x2, y2]})
+                    if cls == 0:
+                        person_conf = max(person_conf, conf)
+                if dump is not None:
+                    dump.write(json.dumps({"frame": n, "dets": dets}) + "\n")
+                for al in engine.step(dets, n)["alerts"]:
+                    p = save_evidence(frame, al["track_id"], al["type"], n, dets, al.get("bbox"), out_dir)
+                    conf = violation_conf(dets, al["type"], al["bbox"], person_conf)
+                    db.insert(al["track_id"], al["type"], n, conf, p, source=str(src), video_time_sec=n / video_fps)
+                    tg.send(f"VIOLATION {al['type']} track {al['track_id']} frame {n}", p)
+                    print(f"  ALERT {al['type']} track={al['track_id']} frame={n}")
+            n+=1
+            if n%30==0:
+                print(f"frame {n}: {frame.shape}")
+    finally:
+        if dump is not None:
+            dump.close()
     cap.release()
     fps = n / max(1e-6, time.time() - t0)
     print(f"Done {n} frames | FPS={fps:.1f} | new_events={db.count()-n0}")
+    write_run_meta(
+        out_dir, mode="detector" if detector is not None else "no-detector", source=str(src),
+        detector=args.detector or None, config=args.config, cfg=cfg_thresholds, imgsz=sz,
+        device=device if detector is not None else None, video_fps=video_fps, frames=n,
+        fps=round(fps, 2), new_events=db.count() - n0,
+        decode_resize_ms=round(1000 * t_read / n, 2) if n else None,
+        inference_ms=round(1000 * t_infer / n, 2) if n else None,
+    )
     if n:
         print(f"imgsz={sz} | decode+resize={1000*t_read/n:.1f} ms/frame | inference={1000*t_infer/n:.1f} ms/frame")
     db.close()

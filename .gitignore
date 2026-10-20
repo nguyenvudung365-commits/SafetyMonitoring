@@ -63,3 +63,6 @@ reports/*.pdf
 !data/.gitkeep
 !weights/.gitkeep
 logs_*/
+
+# Ngoại lệ: giữ GT trong Git
+!data/gt_events/*.csv

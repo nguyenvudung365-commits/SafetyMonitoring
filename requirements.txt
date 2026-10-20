@@ -1,9 +1,12 @@
-ultralytics>=8.2
-requests>=2.31
-opencv-python>=4.8
-pyyaml>=6.0
-numpy>=1.24
-pytest>=7.0
-albumentations>=1.3.0
-fastapi>=0.100
-uvicorn>=0.23
+# Phiên bản đã chạy được (Python 3.12.5, Windows 11, kiểm 18/10/2026). Torch cài riêng theo CUDA của máy.
+ultralytics==8.4.157
+requests==2.32.3
+opencv-python==4.12.0.88
+pyyaml==6.0.2
+numpy==2.2.6
+pytest==9.0.1
+albumentations==1.4.2
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1   # TestClient của FastAPI/Starlette cần
+matplotlib==3.10.6   # chỉ cho tools/sweep_rules.py --plot

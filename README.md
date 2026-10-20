@@ -63,21 +63,33 @@ uvicorn src.api.app:app --port 8000
 Nếu pipeline chạy với `--out-dir` khác `logs`, đặt biến môi trường `SAFETY_LOG_DIR` cùng đường dẫn trước khi chạy uvicorn.
 
 ## 7. Tầng luật (`configs/safety.yaml`)
-- **PPE:** `no_helmet` xét trong 1/3 trên bbox người; `no_vest` xét vùng thân (1/6 → 2/3 chiều cao). Detection dưới `ppe_conf` (0.50) bị bỏ qua.
+- **PPE:** `no_helmet` xét trong 1/3 trên bbox người; `no_vest` xét vùng thân (1/6 → 2/3 chiều cao). Detection dưới `ppe_conf` (0.50) bị bỏ qua. Mỗi cặp helmet/no_helmet, vest/no_vest lấy detection conf cao nhất gắn với người (không phụ thuộc thứ tự; hoà conf thì ưu tiên lớp tuân thủ).
 - **Vùng cấm:** điểm chân (giữa cạnh dưới bbox) nằm trong polygon `zones.forbidden`, và person conf ≥ `zone_person_conf` (0.50) để loại móc cẩu/vật nhỏ bị nhận nhầm thành người.
-- **Máy móc:** khoảng cách chân người → tâm máy < `machinery_distance` (0.08, nới theo chiều cao bbox).
+- **Máy móc:** khoảng cách chân người → **cạnh** bbox máy gần nhất < `machinery_k` × chiều cao bbox người (k=0.5; người xa có ngưỡng nhỏ hơn). Bbox người nằm ≥ `cabin_overlap` (0.8) trong bbox máy bị coi là ngồi trong cabin, bỏ qua.
 - **Té ngã:** `RuleEngine.step(..., fall_probs={track_id: p})` — báo khi p > `fall_conf` (0.70) đủ `fall_frames` (8) frame. Chưa có M2 thì không truyền `fall_probs`, nhánh này tắt.
 - **Xác nhận + cooldown:** PPE/vùng/máy cần `ppe_frames` (15) frame liên tiếp; cùng (ID, loại) không báo lại trong `cooldown_sec` (60 s). Số frame cooldown tính theo FPS thật của video.
 - **Gộp sự kiện khi tracker đổi ID:** nếu cùng loại vi phạm đã báo cho một track vừa biến mất, cách ≤ `dedup_sec` (3 s) và bbox chồng IoU ≥ `dedup_iou` (0.20) thì không báo lại.
 
-## 8. Chạy trên Kaggle
+## 8. Đánh giá sự kiện, quét tham số, demo một lệnh
+```bash
+# demo một lệnh (mock): scripts/run_demo.sh   |   scripts\run_demo.bat
+# thật: scripts/run_demo.sh VIDEO.mp4 best.pt  (ghi logs_demo/dets.jsonl để quét tham số)
+python tools/eval_events.py --db logs_demo/events.db --gt data/gt_events/<clip>.csv --clip <clip> --source <tên video> --fps 30 --n-frames <N>
+python tools/sweep_rules.py --dets logs_demo/dets.jsonl --gt data/gt_events/<clip>.csv --clip <clip> --ppe-frames 5,10,15,25 --ppe-conf 0.3,0.5,0.7 --out-csv logs_demo/sweep.csv --plot logs_demo/recall_far.png
+```
+Mỗi lần chạy `stream.py` ghi `<out-dir>/run_meta.json` (commit, config, GPU, imgsz, FPS). Bảng `events` có thêm cột `source`, `video_time_sec` (DB cũ tự migrate). Định dạng ground-truth: `data/gt_events/README.md` (chưa có nhãn thật).
+
+## 9. Chạy trên Kaggle
 Xem [reports/huong_dan_kaggle.md](reports/huong_dan_kaggle.md): upload `best.pt` + video thành Kaggle Dataset, `git clone` repo, chạy với `--out-dir /kaggle/working/logs`.
 
 ## Trạng thái
 - M1: train xong, chạy được trong pipeline. Validation: P 0.9051 / R 0.8053 / mAP50 0.8668 / mAP50-95 0.6325.
 - M2 (té ngã): chưa tích hợp — chờ `best_tcn.pt`.
 - Tracker `src/tracking/bytetrack.py` là bản IoU greedy tự viết (chưa Kalman); ID có thể đổi khi người đi chéo nhau (đã giảm trùng sự kiện bằng bước gộp ở mục 7, chưa triệt để).
+- Luật `machinery` đã thêm loại trừ cabin (bbox người nằm >= `cabin_overlap` trong bbox máy thì bỏ qua), CHƯA đo lại trên clip thật; người đứng trước máy lớn có thể bị bỏ sót.
+- Khoá cũ `machinery_distance` trong config bị bỏ qua; dùng `machinery_k` (và `cabin_overlap`).
 - Luật `no_helmet`/`machinery` mới chạy ra sự kiện, chưa kiểm chứng đúng ngữ cảnh (clip máy xúc chỉ có người ngồi trong cabin). Clip 1:36 trên laptop: 14 → 11 sự kiện sau khi thêm lọc vùng cấm + gộp sự kiện (xem tay, 1 clip).
+- Quy ước đếm trùng khi đánh giá: một vi phạm kéo dài hơn cooldown (60 s) sinh thêm event, và event thứ hai trên cùng GT bị tính là dương tính giả (FP). Không có `--source`, `eval_events.py` tính mọi event trong DB (có in cảnh báo).
 - Lỗi đã biết: vest phản quang màu nhạt bị báo `no_vest`.
 - Chưa có số FAR/h / Precision–Recall trên video thật; event demo chưa được kiểm tay hết.
 - FPS phụ thuộc máy: luôn ghi kèm GPU khi báo cáo.

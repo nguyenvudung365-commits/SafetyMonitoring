@@ -9,7 +9,8 @@ zones:
       polygon: [[0.55, 0.20], [0.85, 0.20], [0.85, 0.60], [0.55, 0.60]]
 
 thresholds:
-  machinery_distance: 0.08   # τsafe (chuẩn hoá theo chiều rộng ảnh), sẽ hiệu chỉnh theo bbox height
+  machinery_k: 0.5         # ngưỡng máy móc = k * chiều cao bbox người, đo từ chân tới CẠNH bbox máy
+  cabin_overlap: 0.8       # bbox người nằm >= 80% trong bbox máy -> coi là ngồi trong cabin, bỏ qua
   ppe_conf: 0.50
   zone_person_conf: 0.50   # person conf tối thiểu cho luật vùng cấm (loại móc cẩu conf 0.27-0.32)
   dedup_iou: 0.20          # gộp sự kiện khi tracker đổi id: bbox chồng >= 0.2 với người đã báo

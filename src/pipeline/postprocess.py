@@ -25,7 +25,8 @@ def evaluate_person(person_bbox, others, machines, polygons, cfg, person_conf=1.
     # vùng cấm cần person conf cao hơn ngưỡng detect mặc định để loại móc cẩu/vật nhỏ bị nhận nhầm
     in_zone = person_conf >= th.get("zone_person_conf", 0.0) and zone_violation(person_bbox, polygons)
     near_m = machinery_violation(
-        person_bbox, [m["bbox"] for m in machines], tau=th["machinery_distance"]
+        person_bbox, [m["bbox"] for m in machines],
+        k=th.get("machinery_k", 0.5), cabin_overlap=th.get("cabin_overlap", 0.8),
     )
     vtypes = []
     if flags["no_helmet"]:
@@ -54,6 +55,9 @@ class RuleEngine:
         self.dedup_frames = int(t.get("dedup_sec", 3) * fps)
         self.dedup_iou = cfg["thresholds"].get("dedup_iou", 0.2)
         self.alerted = {}  # track_id -> {types, bbox, last_seen}: để gộp sự kiện khi tracker đổi id
+        self.last_seen = {}  # track_id -> frame_idx thấy gần nhất, để dọn state của track đã chết
+        # id không tái sử dụng; quá hạn này (đủ cho dedup + tracker giữ track mất) thì state vô dụng
+        self.prune_after = self.dedup_frames + self.tracker.max_lost + 1
         self.polygons = [z["polygon"] for z in cfg.get("zones", {}).get("forbidden", [])]
 
     def step(self, detections, frame_idx, fall_probs=None):
@@ -70,6 +74,7 @@ class RuleEngine:
             if fall_probs is not None and fall_probs.get(tr["track_id"], 0.0) > self.fall_conf:
                 vtypes.append("fall")
             seen.add(tr["track_id"])
+            self.last_seen[tr["track_id"]] = frame_idx
             for vt in ("no_helmet", "no_vest", "zone", "machinery", "fall"):
                 if vt == "fall" and fall_probs is None:
                     continue
@@ -96,7 +101,21 @@ class RuleEngine:
             rec = self.alerted.get(tr["track_id"])
             if rec is not None:
                 rec["bbox"], rec["last_seen"] = tr["bbox"], frame_idx
+        self._prune(frame_idx)
         return {"tracks": tracks, "alerts": merge_alerts(alerts)}
+
+    def _prune(self, frame_idx):
+        """Xoá history/alerted/cooldown của track không còn xuất hiện, tránh rò bộ nhớ trên luồng dài."""
+        dead = {tid for tid, last in self.last_seen.items() if frame_idx - last > self.prune_after}
+        if not dead:
+            return
+        for tid in dead:
+            del self.last_seen[tid]
+            self.alerted.pop(tid, None)
+        for key in [k for k in self.history if k[0] in dead]:
+            del self.history[key]
+        for key in [k for k in self.state.last_alert if k[0] in dead]:
+            del self.state.last_alert[key]
 
     def _is_duplicate(self, tr, vt, frame_idx, seen_now):
         """Cùng loại vi phạm đã báo cho một track vừa mất id ở gần vị trí này -> cùng một người."""
